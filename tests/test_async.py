@@ -372,6 +372,18 @@ class TestAsync(TestTransitions):
         asyncio.run(run())
         self.assertEqual(0, len(m.async_tasks))
 
+    def test_resolve_callbacks(self):
+
+        async def run():
+            m = self.machine_cls(states=['A', 'B'], before_state_change='does_not_exist', initial='A')
+            with self.assertRaises(AttributeError):
+                await m.to_B()
+            self.assertTrue(m.is_A())
+            m.ignore_invalid_callbacks = True
+            await m.to_B()
+            self.assertTrue(m.is_B())
+        asyncio.run(run())
+
 
 @skipIf(asyncio is None or (pgv is None and gv is None), "AsyncGraphMachine requires asyncio and (py)gaphviz")
 class AsyncGraphMachine(TestAsync):

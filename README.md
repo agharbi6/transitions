@@ -280,7 +280,7 @@ machine.add_states([solid, liquid, gas])
 
 States are initialized *once* when added to the machine and will persist until they are removed from it. In other words: if you alter the attributes of a state object, this change will NOT be reset the next time you enter that state. Have a look at how to [extend state features](#state-features) in case you require some other behaviour.
 
-#### <a name="state-callbacks"></a>Callbacks
+#### <a name="state-callbacks"></a>State callbacks
 A `State` can also be associated with a list of `enter` and `exit` callbacks, which are called whenever the state machine enters or leaves that state. You can specify callbacks during initialization by passing them to a `State` object constructor, in a state property dictionary, or add them later. 
 
 For convenience, whenever a new `State` is added to a `Machine`, the methods `on_enter_«state name»` and `on_exit_«state name»` are dynamically created on the Machine (not on the model!), which allow you to dynamically add new enter and exit callbacks later if you need them.
@@ -671,7 +671,7 @@ lump.heat(temp=74)
 
 ... would pass the `temp=74` optional kwarg to the `is_flammable()` check (possibly wrapped in an `EventData` instance). For more on this, see the [Passing data](#passing-data) section below.
 
-#### <a name="transition-callbacks"></a>Callbacks
+#### <a name="transition-callbacks"></a>Transition callbacks
 You can attach callbacks to transitions as well as states. Every transition has `'before'` and `'after'` attributes that contain a list of methods to call before and after the transition executes:
 
 ```python
@@ -810,15 +810,16 @@ model.imported()
 The callable resolution is done in `Machine.resolve_callable`.
 This method can be overridden in case more complex callable resolution strategies are required.
 
-
 **Example**
 ```python
 class CustomMachine(Machine):
     @staticmethod
-    def resolve_callable(func, event_data):
+    def resolve_callable(func, event_data, ignore_invalid_callbacks=False):
         # manipulate arguments here and return func, or super() if no manipulation is done.
-        super(CustomMachine, CustomMachine).resolve_callable(func, event_data)
+        super(CustomMachine, CustomMachine).resolve_callable(func, event_data, ignore_invalid_callbacks)
 ```
+
+Now you might say: Wait! What's that third parameter `ignore_invalid_callbacks` doing? You can pass `ignore_invalid_callbacks=True` to a machine constructor in case a callback is not always available or not available on all models. Usually, `transitions` will raise an `AttributeError` when a callable cannot be resolved. Keep in mind though that `resolve_callback` throws and catches multiple exceptions during (unsuccessful) resolving attempts. As catching exceptions is quite expensive, it might have a considerable impact on your code's performance when `resolve_callback` fails frequently.
 
 ### <a name="execution-order"></a>Callback execution order
 

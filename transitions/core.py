@@ -121,13 +121,13 @@ class State(object):
     def enter(self, event_data):
         """ Triggered when a state is entered. """
         _LOGGER.debug("%sEntering state %s. Processing callbacks...", event_data.machine.name, self.name)
-        event_data.machine.callbacks(self.on_enter, event_data)
+        event_data.machine.callbacks(self.on_enter, event_data, event_data.machine.ignore_invalid_callbacks)
         _LOGGER.info("%sFinished processing state %s enter callbacks.", event_data.machine.name, self.name)
 
     def exit(self, event_data):
         """ Triggered when a state is exited. """
         _LOGGER.debug("%sExiting state %s. Processing callbacks...", event_data.machine.name, self.name)
-        event_data.machine.callbacks(self.on_exit, event_data)
+        event_data.machine.callbacks(self.on_exit, event_data, event_data.machine.ignore_invalid_callbacks)
         _LOGGER.info("%sFinished processing state %s exit callbacks.", event_data.machine.name, self.name)
 
     def add_callback(self, trigger, func):
@@ -259,19 +259,21 @@ class Transition(object):
         _LOGGER.debug("%sInitiating transition from state %s to state %s...",
                       event_data.machine.name, self.source, self.dest)
 
-        event_data.machine.callbacks(self.prepare, event_data)
+        event_data.machine.callbacks(self.prepare, event_data, event_data.machine.ignore_invalid_callbacks)
         _LOGGER.debug("%sExecuted callbacks before conditions.", event_data.machine.name)
 
         if not self._eval_conditions(event_data):
             return False
 
-        event_data.machine.callbacks(itertools.chain(event_data.machine.before_state_change, self.before), event_data)
+        event_data.machine.callbacks(itertools.chain(event_data.machine.before_state_change, self.before), event_data,
+                                     event_data.machine.ignore_invalid_callbacks)
         _LOGGER.debug("%sExecuted callback before transition.", event_data.machine.name)
 
         if self.dest:  # if self.dest is None this is an internal transition with no actual state change
             self._change_state(event_data)
 
-        event_data.machine.callbacks(itertools.chain(self.after, event_data.machine.after_state_change), event_data)
+        event_data.machine.callbacks(itertools.chain(self.after, event_data.machine.after_state_change), event_data,
+                                     event_data.machine.ignore_invalid_callbacks)
         _LOGGER.debug("%sExecuted callback after transition.", event_data.machine.name)
         return True
 
@@ -411,7 +413,7 @@ class Event(object):
         return self._process(event_data)
 
     def _process(self, event_data):
-        self.machine.callbacks(self.machine.prepare_event, event_data)
+        self.machine.callbacks(self.machine.prepare_event, event_data, self.machine.ignore_invalid_callbacks)
         _LOGGER.debug("%sExecuted machine preparation callbacks before conditions.", self.machine.name)
 
         try:
@@ -424,7 +426,7 @@ class Event(object):
             event_data.error = err
             raise
         finally:
-            self.machine.callbacks(self.machine.finalize_event, event_data)
+            self.machine.callbacks(self.machine.finalize_event, event_data, self.machine.ignore_invalid_callbacks)
             _LOGGER.debug("%sExecuted machine finalize callbacks", self.machine.name)
 
         return event_data.result
@@ -470,6 +472,8 @@ class Machine(object):
             present state (e.g., calling an a_to_b() trigger when the current state is c) will be silently
             ignored rather than raising an invalid transition exception.
         name (str): Name of the ``Machine`` instance mainly used for easier log message distinction.
+        ignore_invalid_callbacks (bool): If set to True, callbacks that cannot be found will not raise
+            an AttributeException.
     """
 
     separator = '_'  # separates callback type from state/transition name
@@ -483,7 +487,8 @@ class Machine(object):
                  send_event=False, auto_transitions=True,
                  ordered_transitions=False, ignore_invalid_triggers=None,
                  before_state_change=None, after_state_change=None, name=None,
-                 queued=False, prepare_event=None, finalize_event=None, model_attribute='state', **kwargs):
+                 queued=False, prepare_event=None, finalize_event=None, model_attribute='state',
+                 ignore_invalid_callbacks=False, **kwargs):
         """
         Args:
             model (object or list): The object(s) whose states we want to manage. If 'self',
@@ -558,6 +563,7 @@ class Machine(object):
         self.finalize_event = finalize_event
         self.name = name + ": " if name is not None else ""
         self.model_attribute = model_attribute
+        self.ignore_invalid_callbacks = ignore_invalid_callbacks
 
         self.models = []
 
@@ -1077,13 +1083,19 @@ class Machine(object):
         """
         return all([getattr(model, trigger)(*args, **kwargs) for model in self.models])
 
-    def callbacks(self, funcs, event_data):
-        """ Triggers a list of callbacks """
+    def callbacks(self, funcs, event_data, ignore_invalid_callbacks=False):
+        """ Triggers a list of callbacks. Calls Machine.callback repeatedly.
+        Args:
+            funcs (list): A list of callables or strings to be resolved
+            event_data (EventData): An EventData instance that should be passed to the callbacks
+            ignore_invalid_callbacks(bool): If set to True, the underlying resolve_callable function will not raise an
+                AttributeError if a func cannot be resolved.
+        """
         for func in funcs:
-            self.callback(func, event_data)
+            self.callback(func, event_data, ignore_invalid_callbacks)
             _LOGGER.info("%sExecuted callback '%s'", self.name, func)
 
-    def callback(self, func, event_data):
+    def callback(self, func, event_data, ignore_invalid_callbacks=False):
         """ Trigger a callback function with passed event_data parameters. In case func is a string,
             the callable will be resolved from the passed model in event_data. This function is not intended to
             be called directly but through state and transition callback definitions.
@@ -1095,21 +1107,24 @@ class Machine(object):
             event_data (EventData): An EventData instance to pass to the
                 callback (if event sending is enabled) or to extract arguments
                 from (if event sending is disabled).
+            ignore_invalid_callbacks(bool): If set to True, the underlying resolve_callable function will not raise an
+                AttributeError if func cannot be resolved.
         """
-
-        func = self.resolve_callable(func, event_data)
+        func = self.resolve_callable(func, event_data, ignore_invalid_callbacks)
         if self.send_event:
             func(event_data)
         else:
             func(*event_data.args, **event_data.kwargs)
 
     @staticmethod
-    def resolve_callable(func, event_data):
+    def resolve_callable(func, event_data, ignore_invalid_callbacks=False):
         """ Converts a model's property name, method name or a path to a callable into a callable.
             If func is not a string it will be returned unaltered.
         Args:
             func (str or callable): Property name, method name or a path to a callable
             event_data (EventData): Currently processed event
+            ignore_invalid_callbacks (bool): If set to True, the function will return an empty function instead of
+                raising an AttributeError if a func could not be resolved
         Returns:
             callable function resolved from string or func
         """
@@ -1128,6 +1143,8 @@ class Machine(object):
                         m = getattr(m, n)
                     func = getattr(m, name)
                 except (ImportError, AttributeError, ValueError):
+                    if ignore_invalid_callbacks:
+                        return _blank_func
                     raise AttributeError("Callable with name '%s' could neither be retrieved from the passed "
                                          "model nor imported from a module." % func)
         return func
@@ -1224,6 +1241,10 @@ class MachineError(Exception):
 
     def __str__(self):
         return repr(self.value)
+
+
+def _blank_func(*args, **kwargs):
+    pass
 
 
 # TODO: Remove in 0.9.0

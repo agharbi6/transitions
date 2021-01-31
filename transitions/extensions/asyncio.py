@@ -29,13 +29,13 @@ class AsyncState(State):
     async def enter(self, event_data):
         """ Triggered when a state is entered. """
         _LOGGER.debug("%sEntering state %s. Processing callbacks...", event_data.machine.name, self.name)
-        await event_data.machine.callbacks(self.on_enter, event_data)
+        await event_data.machine.callbacks(self.on_enter, event_data, event_data.machine.ignore_invalid_callbacks)
         _LOGGER.info("%sFinished processing state %s enter callbacks.", event_data.machine.name, self.name)
 
     async def exit(self, event_data):
         """ Triggered when a state is exited. """
         _LOGGER.debug("%sExiting state %s. Processing callbacks...", event_data.machine.name, self.name)
-        await event_data.machine.callbacks(self.on_exit, event_data)
+        await event_data.machine.callbacks(self.on_exit, event_data, event_data.machine.ignore_invalid_callbacks)
         _LOGGER.info("%sFinished processing state %s exit callbacks.", event_data.machine.name, self.name)
 
 
@@ -112,26 +112,26 @@ class AsyncTransition(Transition):
         _LOGGER.debug("%sInitiating transition from state %s to state %s...",
                       event_data.machine.name, self.source, self.dest)
 
-        await event_data.machine.callbacks(self.prepare, event_data)
-        _LOGGER.debug("%sExecuted callbacks before conditions.", event_data.machine.name)
+        machine = event_data.machine
+        await event_data.machine.callbacks(self.prepare, event_data, machine.ignore_invalid_callbacks)
+        _LOGGER.debug("%sExecuted callbacks before conditions.", machine.name)
 
         if not await self._eval_conditions(event_data):
             return False
 
-        machine = event_data.machine
         # cancel running tasks since the transition will happen
         await machine.switch_model_context(event_data.model)
 
-        await event_data.machine.callbacks(event_data.machine.before_state_change, event_data)
-        await event_data.machine.callbacks(self.before, event_data)
-        _LOGGER.debug("%sExecuted callback before transition.", event_data.machine.name)
+        await event_data.machine.callbacks(machine.before_state_change, event_data, machine.ignore_invalid_callbacks)
+        await event_data.machine.callbacks(self.before, event_data, machine.ignore_invalid_callbacks)
+        _LOGGER.debug("%sExecuted callback before transition.", machine.name)
 
         if self.dest:  # if self.dest is None this is an internal transition with no actual state change
             await self._change_state(event_data)
 
-        await event_data.machine.callbacks(self.after, event_data)
-        await event_data.machine.callbacks(event_data.machine.after_state_change, event_data)
-        _LOGGER.debug("%sExecuted callback after transition.", event_data.machine.name)
+        await event_data.machine.callbacks(self.after, event_data, machine.ignore_invalid_callbacks)
+        await event_data.machine.callbacks(machine.after_state_change, event_data, machine.ignore_invalid_callbacks)
+        _LOGGER.debug("%sExecuted callback after transition.", machine.name)
         return True
 
     async def _change_state(self, event_data):
@@ -192,7 +192,7 @@ class AsyncEvent(Event):
         return await self._process(event_data)
 
     async def _process(self, event_data):
-        await self.machine.callbacks(self.machine.prepare_event, event_data)
+        await self.machine.callbacks(self.machine.prepare_event, event_data, self.machine.ignore_invalid_callbacks)
         _LOGGER.debug("%sExecuted machine preparation callbacks before conditions.", self.machine.name)
 
         try:
@@ -205,7 +205,7 @@ class AsyncEvent(Event):
             event_data.error = err
             raise
         finally:
-            await self.machine.callbacks(self.machine.finalize_event, event_data)
+            await self.machine.callbacks(self.machine.finalize_event, event_data, self.machine.ignore_invalid_callbacks)
             _LOGGER.debug("%sExecuted machine finalize callbacks", self.machine.name)
         return event_data.result
 
@@ -252,7 +252,7 @@ class NestedAsyncEvent(NestedEvent):
 
     async def _process(self, event_data):
         machine = event_data.machine
-        await machine.callbacks(event_data.machine.prepare_event, event_data)
+        await machine.callbacks(event_data.machine.prepare_event, event_data, machine.ignore_invalid_callbacks)
         _LOGGER.debug("%sExecuted machine preparation callbacks before conditions.", machine.name)
 
         try:
@@ -265,7 +265,7 @@ class NestedAsyncEvent(NestedEvent):
             event_data.error = err
             raise
         finally:
-            await machine.callbacks(machine.finalize_event, event_data)
+            await machine.callbacks(machine.finalize_event, event_data, machine.ignore_invalid_callbacks)
             _LOGGER.debug("%sExecuted machine finalize callbacks", machine.name)
         return event_data.result
 
@@ -332,24 +332,33 @@ class AsyncMachine(Machine):
         results = await self.await_all([partial(getattr(model, trigger), *args, **kwargs) for model in self.models])
         return all(results)
 
-    async def callbacks(self, funcs, event_data):
-        """ Triggers a list of callbacks """
-        await self.await_all([partial(event_data.machine.callback, func, event_data) for func in funcs])
+    async def callbacks(self, funcs, event_data, ignore_invalid_callbacks=False):
+        """ Triggers a list of callbacks. Calls Machine.callback repeatedly.
+        Args:
+            funcs (list): A list of callables or strings to be resolved
+            event_data (EventData): An EventData instance that should be passed to the callbacks
+            ignore_invalid_callbacks(bool): If set to True, the underlying resolve_callable function will not raise an
+                AttributeError if a func cannot be resolved.
+        """
+        await self.await_all([partial(event_data.machine.callback, func, event_data, ignore_invalid_callbacks)
+                              for func in funcs])
 
-    async def callback(self, func, event_data):
+    async def callback(self, func, event_data, ignore_invalid_callbacks=False):
         """ Trigger a callback function with passed event_data parameters. In case func is a string,
             the callable will be resolved from the passed model in event_data. This function is not intended to
             be called directly but through state and transition callback definitions.
         Args:
-            func (string, callable): The callback function.
+            func (str or callable): The callback function.
                 1. First, if the func is callable, just call it
                 2. Second, we try to import string assuming it is a path to a func
                 3. Fallback to a model attribute
             event_data (EventData): An EventData instance to pass to the
                 callback (if event sending is enabled) or to extract arguments
                 from (if event sending is disabled).
+            ignore_invalid_callbacks(bool): If set to True, the underlying resolve_callable function will not raise an
+                AttributeError if func cannot be resolved.
         """
-        func = self.resolve_callable(func, event_data)
+        func = self.resolve_callable(func, event_data, ignore_invalid_callbacks)
         res = func(event_data) if self.send_event else func(*event_data.args, **event_data.kwargs)
         if inspect.isawaitable(res):
             await res
@@ -576,7 +585,7 @@ class AsyncTimeout(AsyncState):
 
     async def _process_timeout(self, event_data):
         _LOGGER.debug("%sTimeout state %s. Processing callbacks...", event_data.machine.name, self.name)
-        await event_data.machine.callbacks(self.on_timeout, event_data)
+        await event_data.machine.callbacks(self.on_timeout, event_data, event_data.machine.ignore_invalid_callbacks)
         _LOGGER.info("%sTimeout state %s processed.", event_data.machine.name, self.name)
 
     @property

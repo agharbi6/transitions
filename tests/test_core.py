@@ -6,7 +6,7 @@ except ImportError:
 import sys
 
 from .utils import InheritedStuff
-from .utils import Stuff, DummyModel
+from .utils import Stuff
 
 from functools import partial
 from transitions import Machine, MachineError, State, EventData
@@ -1164,6 +1164,15 @@ class TestTransitions(TestCase):
 
         with self.assertRaises(ValueError):
             m.add_transition(m.model_attribute, "A", "B")
+
+    def test_resolve_callbacks(self):
+        m = self.machine_cls(states=['A', 'B'], before_state_change='does_not_exist', initial='A')
+        with self.assertRaises(AttributeError):
+            m.to_B()
+        self.assertTrue(m.is_A())
+        m.ignore_invalid_callbacks = True
+        m.to_B()
+        self.assertTrue(m.is_B())
 
 
 class TestWarnings(TestCase):

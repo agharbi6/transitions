@@ -4,6 +4,7 @@
 
 - State configuration dictionaries passed to `HierarchicalMachine` can also use `states` as a keyword to define substates. If `children` and `states` are present, only `children` will be considered.
 - Feature #500: `HierarchicalMachine` with custom separator now adds `is_state` partials for nested states (e.g. `is_C.s3.a()`) to models (thanks @alterscape)
+- Feature: Introduced `ignore_invalid_callbacks` in `Machine` (and consequently `Machine.callback(s)` and `Machine.resolve_callable`). If set to `True`, `resolve_callalble` will return a blank function and not raise an `AttributeError`.
 
 ## 0.8.6 (December 2020)
 
