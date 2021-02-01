@@ -1,11 +1,16 @@
 checks:
-    python:
-        code_rating: true
-        duplicate_code: true
+  python:
+    code_rating: true
+    duplicate_code: true
 build:
-    tests:
+  tests:
+    override:
+      - pylint-run transitions
+  nodes:
+    analysis:
+      tests:
         override:
-             -  pylint-run transitions
+          - py-scrutinizer-run
 filter:
-    excluded_paths:
-        - tests/*
+  excluded_paths:
+    - tests/*
