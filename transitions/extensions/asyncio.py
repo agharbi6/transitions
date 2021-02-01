@@ -1,9 +1,8 @@
-import itertools
 import logging
 import asyncio
 import contextvars
 import inspect
-from collections import defaultdict, deque
+from collections import deque
 from functools import partial, reduce
 import copy
 
